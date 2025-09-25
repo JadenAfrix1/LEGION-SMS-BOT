@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram OTP Bot Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #ffffff;
+        }
+        .status-card {
+            transition: transform 0.2s;
+            background-color: #2d2d2d;
+            border: 1px solid #404040;
+        }
+        .status-card:hover {
+            transform: translateY(-2px);
+        }
+        .metric-value {
+            font-size: 2rem;
+            font-weight: bold;
+        }
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .status-online {
+            background-color: #28a745;
+            animation: pulse 2s infinite;
+        }
+        .status-offline {
+            background-color: #dc3545;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        .action-button {
+            margin: 0.25rem;
+        }
+        .log-container {
+            max-height: 300px;
+            overflow-y: auto;
+            background-color: #1e1e1e;
+            border: 1px solid #404040;
+            border-radius: 0.375rem;
+            padding: 1rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.875rem;
+        }
+        .card {
+            background-color: #2d2d2d;
+            border: 1px solid #404040;
+        }
+        .card-header {
+            background-color: #343434;
+            border-bottom: 1px solid #404040;
+        }
+        .table-dark {
+            --bs-table-bg: #2d2d2d;
+        }
+        .alert-success {
+            background-color: #1f5132;
+            border-color: #28a745;
+            color: #75b798;
+        }
+        .alert-danger {
+            background-color: #58151c;
+            border-color: #dc3545;
+            color: #f1919a;
+        }
+        .alert-info {
+            background-color: #055160;
+            border-color: #17a2b8;
+            color: #86cfda;
+        }
+    </style>
+</head>
+<body>
+    <div class="container py-4">
+        <!-- Header -->
+        <div class="row mb-4">
+            <div class="col">
+                <h1 class="h2 mb-1">
+                    <i class="fas fa-robot text-primary me-2"></i>
+                    Telegram OTP Bot Dashboard
+                </h1>
+                <p class="text-muted">Monitor and control your IVASMS OTP forwarding bot</p>
+            </div>
+        </div>
+
+        <!-- Alert Area -->
+        <div id="alertArea"></div>
+
+        <!-- Status Cards -->
+        <div class="row g-3 mb-4">
+            <div class="col-md-3">
+                <div class="card status-card h-100">
+                    <div class="card-body text-center">
+                        <i class="fas fa-circle-check text-success fa-2x mb-2"></i>
+                        <h6 class="card-title">Bot Status</h6>
+                        <div id="botStatus">
+                            <span class="status-indicator status-offline"></span>
+                            <span class="text-danger">Offline</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card status-card h-100">
+                    <div class="card-body text-center">
+                        <i class="fas fa-clock text-info fa-2x mb-2"></i>
+                        <h6 class="card-title">Uptime</h6>
+                        <div class="metric-value text-info" id="uptime">--</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card status-card h-100">
+                    <div class="card-body text-center">
+                        <i class="fas fa-paper-plane text-warning fa-2x mb-2"></i>
+                        <h6 class="card-title">OTPs Sent</h6>
+                        <div class="metric-value text-warning" id="otpsSent">0</div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card status-card h-100">
+                    <div class="card-body text-center">
+                        <i class="fas fa-database text-secondary fa-2x mb-2"></i>
+                        <h6 class="card-title">OTPs Logged</h6>
+                        <div class="metric-value text-secondary" id="otpsLogged">0</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Actions Panel -->
+        <div class="row mb-4">
+            <div class="col">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-cogs me-2"></i>
+                            Bot Controls
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-2">
+                            <div class="col-auto">
+                                <button class="btn btn-primary action-button" onclick="checkOTP()">
+                                    <i class="fas fa-search me-1"></i>
+                                    Check for OTPs
+                                </button>
+                            </div>
+                            <div class="col-auto">
+                                <button class="btn btn-info action-button" onclick="sendTestMessage()">
+                                    <i class="fas fa-vial me-1"></i>
+                                    Send Test Message
+                                </button>
+                            </div>
+                            <div class="col-auto">
+                                <button class="btn btn-warning action-button" onclick="clearCache()">
+                                    <i class="fas fa-trash me-1"></i>
+                                    Clear Cache
+                                </button>
+                            </div>
+                            <div class="col-auto">
+                                <button class="btn btn-success action-button" onclick="startMonitor()">
+                                    <i class="fas fa-play me-1"></i>
+                                    Start Monitor
+                                </button>
+                            </div>
+                            <div class="col-auto">
+                                <button class="btn btn-danger action-button" onclick="stopMonitor()">
+                                    <i class="fas fa-stop me-1"></i>
+                                    Stop Monitor
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Statistics Panel -->
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card h-100">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-chart-line me-2"></i>
+                            Statistics
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            <div class="col-6">
+                                <div class="text-center">
+                                    <div class="text-muted small">Last Check</div>
+                                    <div class="fw-bold" id="lastCheck">Never</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="text-center">
+                                    <div class="text-muted small">Monitor Status</div>
+                                    <div class="fw-bold" id="monitorStatus">
+                                        <span class="badge bg-secondary">Stopped</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card h-100">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-exclamation-triangle me-2"></i>
+                            System Status
+                        </h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="systemStatus">
+                            <div class="text-warning">
+                                <i class="fas fa-exclamation-circle me-2"></i>
+                                Checking system status...
+                            </div>
+                        </div>
+                        <div class="mt-2">
+                            <small class="text-muted">Last updated: <span id="lastUpdated">--</span></small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Recent OTP Logs -->
+        <div class="row mb-4">
+            <div class="col">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-key me-2"></i>
+                            Recent OTP Logs
+                        </h5>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="refreshOTPLogs()">
+                            <i class="fas fa-refresh me-1"></i>
+                            Refresh
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-dark table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>OTP Code</th>
+                                        <th>Service</th>
+                                        <th>Phone</th>
+                                        <th>Time</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="otpLogsTable">
+                                    <tr>
+                                        <td colspan="5" class="text-muted text-center">Loading OTP logs...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Activity Log -->
+        <div class="row">
+            <div class="col">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="card-title mb-0">
+                            <i class="fas fa-list me-2"></i>
+                            Activity Log
+                        </h5>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="clearLog()">
+                            <i class="fas fa-eraser me-1"></i>
+                            Clear Log
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <div id="activityLog" class="log-container">
+                            <div class="text-muted">Waiting for activity...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Global variables
+        let logEntries = [];
+        let isLoading = false;
+
+        // Utility functions
+        function formatUptime(seconds) {
+            const days = Math.floor(seconds / 86400);
+            const hours = Math.floor((seconds % 86400) / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            
+            if (days > 0) return `${days}d ${hours}h`;
+            if (hours > 0) return `${hours}h ${minutes}m`;
+            return `${minutes}m`;
+        }
+
+        function addLogEntry(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const entry = `[${timestamp}] ${message}`;
+            logEntries.unshift(entry);
+            
+            // Keep only last 50 entries
+            if (logEntries.length > 50) {
+                logEntries = logEntries.slice(0, 50);
+            }
+            
+            updateActivityLog();
+        }
+
+        function updateActivityLog() {
+            const logContainer = document.getElementById('activityLog');
+            if (logEntries.length === 0) {
+                logContainer.innerHTML = '<div class="text-muted">Waiting for activity...</div>';
+            } else {
+                logContainer.innerHTML = logEntries.map(entry => 
+                    `<div class="mb-1">${entry}</div>`
+                ).join('');
+            }
+        }
+
+        function showAlert(message, type = 'info') {
+            const alertArea = document.getElementById('alertArea');
+            const alertClass = type === 'success' ? 'alert-success' : 
+                              type === 'error' ? 'alert-danger' : 'alert-info';
+            
+            const alert = `
+                <div class="alert ${alertClass} alert-dismissible fade show" role="alert">
+                    ${message}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                </div>
+            `;
+            
+            alertArea.innerHTML = alert;
+            
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+                const alertElement = alertArea.querySelector('.alert');
+                if (alertElement) {
+                    const bsAlert = new bootstrap.Alert(alertElement);
+                    bsAlert.close();
+                }
+            }, 5000);
+        }
+
+        // API functions
+        async function apiCall(endpoint, method = 'GET') {
+            try {
+                const response = await fetch(`/api/${endpoint}`, {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                return await response.json();
+            } catch (error) {
+                console.error(`API call failed: ${error}`);
+                return { success: false, message: error.message };
+            }
+        }
+
+        // Bot control functions
+        async function startMonitor() {
+            if (isLoading) return;
+            isLoading = true;
+            
+            addLogEntry('Starting OTP monitoring...');
+            const result = await apiCall('start', 'POST');
+            
+            if (result.success) {
+                showAlert(result.message, 'success');
+                addLogEntry('✅ OTP monitoring started');
+            } else {
+                showAlert(result.message, 'error');
+                addLogEntry('❌ Failed to start monitoring');
+            }
+            
+            isLoading = false;
+            updateStatus();
+        }
+
+        async function stopMonitor() {
+            if (isLoading) return;
+            isLoading = true;
+            
+            addLogEntry('Stopping OTP monitoring...');
+            const result = await apiCall('stop', 'POST');
+            
+            if (result.success) {
+                showAlert(result.message, 'success');
+                addLogEntry('⏹️ OTP monitoring stopped');
+            } else {
+                showAlert(result.message, 'error');
+                addLogEntry('❌ Failed to stop monitoring');
+            }
+            
+            isLoading = false;
+            updateStatus();
+        }
+
+        async function sendTestMessage() {
+            if (isLoading) return;
+            isLoading = true;
+            
+            addLogEntry('Sending test message...');
+            const result = await apiCall('test', 'POST');
+            
+            if (result.success) {
+                showAlert(result.message, 'success');
+                addLogEntry('🧪 Test message sent successfully');
+            } else {
+                showAlert(result.message, 'error');
+                addLogEntry('❌ Failed to send test message');
+            }
+            
+            isLoading = false;
+        }
+
+        async function checkOTP() {
+            if (isLoading) return;
+            isLoading = true;
+            
+            addLogEntry('Checking for new OTPs...');
+            const result = await apiCall('check', 'POST');
+            
+            if (result.success) {
+                showAlert(result.message, 'info');
+                addLogEntry(`🔍 ${result.message}`);
+            } else {
+                showAlert(result.message, 'error');
+                addLogEntry('❌ Failed to check for OTPs');
+            }
+            
+            isLoading = false;
+            refreshOTPLogs();
+        }
+
+        async function clearCache() {
+            if (isLoading) return;
+            isLoading = true;
+            
+            addLogEntry('Clearing OTP cache...');
+            const result = await apiCall('clear-cache', 'POST');
+            
+            if (result.success) {
+                showAlert(result.message, 'success');
+                addLogEntry('🗑️ OTP cache cleared');
+            } else {
+                showAlert(result.message, 'error');
+                addLogEntry('❌ Failed to clear cache');
+            }
+            
+            isLoading = false;
+        }
+
+        function clearLog() {
+            logEntries = [];
+            updateActivityLog();
+            addLogEntry('Activity log cleared');
+        }
+
+        // Status update functions
+        async function updateStatus() {
+            try {
+                const status = await apiCall('status');
+                
+                if (status) {
+                    // Update status indicators
+                    const botStatusElement = document.getElementById('botStatus');
+                    if (status.is_running) {
+                        botStatusElement.innerHTML = `
+                            <span class="status-indicator status-online"></span>
+                            <span class="text-success">Online</span>
+                        `;
+                        document.getElementById('monitorStatus').innerHTML = 
+                            '<span class="badge bg-success">Running</span>';
+                    } else {
+                        botStatusElement.innerHTML = `
+                            <span class="status-indicator status-offline"></span>
+                            <span class="text-danger">Offline</span>
+                        `;
+                        document.getElementById('monitorStatus').innerHTML = 
+                            '<span class="badge bg-secondary">Stopped</span>';
+                    }
+                    
+                    // Update metrics
+                    document.getElementById('uptime').textContent = status.uptime || '--';
+                    document.getElementById('otpsSent').textContent = status.total_otps_sent || 0;
+                    document.getElementById('otpsLogged').textContent = status.total_otps_logged || 0;
+                    document.getElementById('lastCheck').textContent = status.last_check || 'Never';
+                    
+                    // Update system status
+                    const systemStatus = document.getElementById('systemStatus');
+                    if (status.is_running) {
+                        systemStatus.innerHTML = `
+                            <div class="text-success">
+                                <i class="fas fa-check-circle me-2"></i>
+                                All systems operational
+                            </div>
+                        `;
+                    } else {
+                        systemStatus.innerHTML = `
+                            <div class="text-warning">
+                                <i class="fas fa-exclamation-triangle me-2"></i>
+                                Monitoring stopped
+                            </div>
+                        `;
+                    }
+                    
+                    document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
+                }
+            } catch (error) {
+                console.error('Failed to update status:', error);
+            }
+        }
+
+        async function refreshOTPLogs() {
+            try {
+                const result = await apiCall('logs');
+                const tableBody = document.getElementById('otpLogsTable');
+                
+                if (result.success && result.logs.length > 0) {
+                    tableBody.innerHTML = result.logs.map(log => `
+                        <tr>
+                            <td><code>${log.otp_code}</code></td>
+                            <td>${log.service_name || 'Unknown'}</td>
+                            <td><code>${log.phone_number || 'N/A'}</code></td>
+                            <td><small>${log.timestamp}</small></td>
+                            <td>
+                                ${log.sent_to_telegram ? 
+                                    '<span class="badge bg-success">Sent</span>' : 
+                                    '<span class="badge bg-warning">Pending</span>'
+                                }
+                            </td>
+                        </tr>
+                    `).join('');
+                } else {
+                    tableBody.innerHTML = `
+                        <tr>
+                            <td colspan="5" class="text-muted text-center">
+                                ${result.success ? 'No OTP logs found' : 'Failed to load logs'}
+                            </td>
+                        </tr>
+                    `;
+                }
+            } catch (error) {
+                console.error('Failed to refresh OTP logs:', error);
+                document.getElementById('otpLogsTable').innerHTML = `
+                    <tr>
+                        <td colspan="5" class="text-danger text-center">Error loading logs</td>
+                    </tr>
+                `;
+            }
+        }
+
+        // Initialize dashboard
+        function initDashboard() {
+            addLogEntry('Dashboard initialized');
+            updateStatus();
+            refreshOTPLogs();
+            
+            // Set up periodic updates
+            setInterval(updateStatus, 10000); // Update every 10 seconds
+            setInterval(refreshOTPLogs, 30000); // Refresh logs every 30 seconds
+        }
+
+        // Start dashboard when page loads
+        document.addEventListener('DOMContentLoaded', initDashboard);
+    </script>
+</body>
+</html>
