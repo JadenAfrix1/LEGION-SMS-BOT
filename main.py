@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Telegram OTP Bot - Complete Implementation
+Telegram OTP Bot - Enhanced Implementation with Authentication
 Monitors IVASMS.com for new OTPs and sends them to Telegram groups
-Includes Flask web dashboard for monitoring and control
+Includes secure Flask web dashboard with beautiful UI
 """
 
 import os
+import sys
 import json
 import asyncio
 import logging
@@ -13,15 +14,17 @@ import re
 import requests
 import threading
 import time
+import hashlib
 from datetime import datetime, timedelta
+from functools import wraps
 from bs4 import BeautifulSoup
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, session, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import func
 from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
-from telegram import Bot
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 # Load environment variables
 load_dotenv()
@@ -49,8 +52,9 @@ db = SQLAlchemy(model_class=Base)
 
 # Create Flask app
 app = Flask(__name__)
-app.secret_key = os.environ.get("SESSION_SECRET", "telegram-otp-bot-secret-key")
+app.secret_key = os.environ.get("SESSION_SECRET", "telegram-otp-bot-secret-key-navy-enhanced")
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
 # Database configuration
 app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL", "sqlite:///bot.db")
@@ -87,12 +91,39 @@ class BotStats(db.Model):
     def __repr__(self):
         return f'<BotStats {self.stat_name}: {self.stat_value}>'
 
+class User(db.Model):
+    """User authentication model"""
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    
+    def __repr__(self):
+        return f'<User {self.email}>'
+
+# ================================
+# AUTHENTICATION FUNCTIONS
+# ================================
+
+def hash_password(password):
+    """Hash password using SHA-256"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def login_required(f):
+    """Decorator to require login for routes"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user_id' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
 # ================================
 # UTILITY FUNCTIONS
 # ================================
 
 def format_otp_message(otp_data):
-    """Format OTP data for Telegram with touch-to-copy functionality"""
+    """Format OTP data for Telegram with touch-to-copy functionality and markup buttons"""
     otp = otp_data.get('otp', 'N/A')
     phone = otp_data.get('phone', 'N/A')
     service = otp_data.get('service', 'Unknown')
@@ -108,6 +139,15 @@ def format_otp_message(otp_data):
 <i>Tap the OTP to copy it!</i>"""
     
     return message
+
+def create_markup_buttons():
+    """Create inline keyboard markup with navigation buttons"""
+    keyboard = [
+        [InlineKeyboardButton("📱 Numbers Channel", url="https://t.me/your_numbers_channel")],
+        [InlineKeyboardButton("🔐 OTP Group", url="https://t.me/your_otp_group")],
+        [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/your_developer")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 def format_multiple_otps(otp_list):
     """Format multiple OTPs into a single message"""
@@ -417,13 +457,15 @@ class TelegramOTPBot:
 
 
     async def send_otp_message(self, otp_data):
-        """Send OTP message to Telegram group"""
+        """Send OTP message to Telegram group with markup buttons"""
         try:
             message = format_otp_message(otp_data)
+            markup = create_markup_buttons()
             await self.bot.send_message(
                 chat_id=self.group_id,
                 text=message,
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=markup
             )
             return True
         except Exception as e:
@@ -431,13 +473,15 @@ class TelegramOTPBot:
             return False
 
     async def send_multiple_otps(self, otp_list):
-        """Send multiple OTPs in a single message"""
+        """Send multiple OTPs in a single message with markup buttons"""
         try:
             message = format_multiple_otps(otp_list)
+            markup = create_markup_buttons()
             await self.bot.send_message(
                 chat_id=self.group_id,
                 text=message,
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=markup
             )
             return True
         except Exception as e:
@@ -445,7 +489,7 @@ class TelegramOTPBot:
             return False
 
     async def send_test_message(self):
-        """Send a test message to verify bot functionality"""
+        """Send a test message to verify bot functionality with markup buttons"""
         try:
             test_message = """🧪 <b>Test Message</b>
 
@@ -454,13 +498,16 @@ This is a test message to verify that the Telegram OTP Bot is working correctly.
 ✅ Bot is online and functional
 ✅ Message formatting is working
 ✅ Connection to Telegram is established
+✅ Markup buttons are working
 
 <i>Test completed successfully!</i>"""
             
+            markup = create_markup_buttons()
             await self.bot.send_message(
                 chat_id=self.group_id,
                 text=test_message,
-                parse_mode='HTML'
+                parse_mode='HTML',
+                reply_markup=markup
             )
             return True
         except Exception as e:
@@ -702,12 +749,50 @@ bot_controller = None
 # FLASK ROUTES
 # ================================
 
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Login route with authentication"""
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip()
+        password = request.form.get('password', '')
+        
+        # Check credentials
+        if email == "tawandamahachi07@gmail.com" and password == "mahachi2007":
+            user = db.session.query(User).filter_by(email=email).first()
+            if not user:
+                # Create user if not exists
+                user = User(
+                    email=email,
+                    password_hash=hash_password(password)
+                )
+                db.session.add(user)
+                db.session.commit()
+            
+            session['user_id'] = user.id
+            session['user_email'] = user.email
+            session.permanent = True
+            flash('Login successful!', 'success')
+            return redirect(url_for('dashboard'))
+        else:
+            flash('Invalid email or password!', 'error')
+    
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    """Logout route"""
+    session.clear()
+    flash('You have been logged out successfully!', 'info')
+    return redirect(url_for('login'))
+
 @app.route('/')
+@login_required
 def dashboard():
-    """Main dashboard page"""
+    """Main dashboard page with authentication"""
     return render_template('dashboard.html')
 
 @app.route('/api/status')
+@login_required
 def api_status():
     """Get bot status and statistics"""
     if bot_controller is None:
@@ -725,6 +810,7 @@ def api_status():
     return jsonify(stats)
 
 @app.route('/api/start', methods=['POST'])
+@login_required
 def api_start():
     """Start OTP monitoring"""
     if bot_controller is None:
@@ -735,6 +821,7 @@ def api_start():
     return jsonify({'message': result, 'success': success})
 
 @app.route('/api/stop', methods=['POST'])
+@login_required
 def api_stop():
     """Stop OTP monitoring"""
     if bot_controller is None:
@@ -744,6 +831,7 @@ def api_stop():
     return jsonify({'message': result, 'success': True})
 
 @app.route('/api/test', methods=['POST'])
+@login_required
 def api_test():
     """Send test message"""
     if bot_controller is None:
@@ -759,6 +847,7 @@ def api_test():
         return jsonify({'message': f'Error: {str(e)}', 'success': False})
 
 @app.route('/api/check', methods=['POST'])
+@login_required
 def api_check():
     """Manually check for OTPs"""
     if bot_controller is None:
@@ -769,6 +858,7 @@ def api_check():
     return jsonify({'message': result, 'success': success})
 
 @app.route('/api/clear-cache', methods=['POST'])
+@login_required
 def api_clear_cache():
     """Clear OTP cache"""
     if bot_controller is None:
@@ -778,6 +868,7 @@ def api_clear_cache():
     return jsonify({'message': result, 'success': True})
 
 @app.route('/api/logs')
+@login_required
 def api_logs():
     """Get recent OTP logs"""
     try:
@@ -800,6 +891,7 @@ def api_logs():
         return jsonify({'logs': [], 'success': False, 'error': str(e)})
 
 @app.route('/api/debug')
+@login_required
 def api_debug():
     """Debug information for troubleshooting"""
     debug_info = {
@@ -849,27 +941,28 @@ except Exception as e:
     logger.debug("This might be due to missing environment variables or network issues")
     bot_controller = None
 
-# Auto-start monitoring if credentials are available and bot controller is initialized
+# Auto-start persistent monitoring if credentials are available and bot controller is initialized
 if bot_controller and (os.environ.get("TELEGRAM_BOT_TOKEN") and 
     os.environ.get("TELEGRAM_GROUP_ID") and 
     os.environ.get("IVASMS_EMAIL") and 
     os.environ.get("IVASMS_PASSWORD")):
     
-    # Start monitoring in a separate thread after a short delay
-    def delayed_start():
+    # Start persistent monitoring in a separate thread after a short delay
+    def delayed_persistent_start():
         try:
-            time.sleep(5)  # Wait 5 seconds for app to fully initialize
+            time.sleep(8)  # Wait 8 seconds for app to fully initialize
             result = bot_controller.start_monitoring()
             logger.info(f"Auto-start result: {result}")
+            logger.info("✅ Persistent monitoring enabled - will run continuously until manually stopped")
         except Exception as e:
             logger.error(f"Auto-start failed: {e}")
     
-    threading.Thread(target=delayed_start, daemon=True).start()
-    logger.info("Auto-starting OTP monitoring...")
+    threading.Thread(target=delayed_persistent_start, daemon=False).start()
+    logger.info("🚀 Auto-starting persistent OTP monitoring...")
 else:
     logger.warning("Auto-start disabled: Missing credentials or bot controller not initialized")
     if not bot_controller:
         logger.error("Bot controller is None - check initialization errors above")
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
