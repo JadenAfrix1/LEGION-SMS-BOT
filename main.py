@@ -143,9 +143,9 @@ def format_otp_message(otp_data):
 def create_markup_buttons():
     """Create inline keyboard markup with navigation buttons"""
     keyboard = [
-        [InlineKeyboardButton("📱 Numbers Channel", url="https://t.me/your_numbers_channel")],
-        [InlineKeyboardButton("🔐 OTP Group", url="https://t.me/your_otp_group")],
-        [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/your_developer")]
+        [InlineKeyboardButton("📱 Numbers Channel", url="https://t.me/cybixtech")],
+        [InlineKeyboardButton("🔐 OTP Group", url="https://t.me/legionsms")],
+        [InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/cybixdev")]
     ]
     return InlineKeyboardMarkup(keyboard)
 
