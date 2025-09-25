@@ -24,7 +24,10 @@ def format_otp_message(otp_data):
 🌐 Service: <b>{service}</b>
 ⏰ Time: {timestamp}
 
-<i>Tap the OTP to copy it!</i>"""
+<i>Tap the OTP to copy it!</i>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<i>Powered by @cybixdev</i>"""
     
     return message
 
@@ -55,7 +58,7 @@ def format_multiple_otps(otp_list):
         msg = f"<b>{i}.</b> <code>{otp}</code> | {service} | <code>{phone}</code>"
         messages.append(msg)
     
-    footer = "\n\n<i>Tap any OTP to copy it!</i>"
+    footer = "\n\n<i>Tap any OTP to copy it!</i>\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n<i>Powered by @cybixdev</i>"
     
     return header + "\n".join(messages) + footer
 

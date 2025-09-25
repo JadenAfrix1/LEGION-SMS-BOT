@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta
 from flask import Flask, jsonify, request, render_template
 from dotenv import load_dotenv
-from telegram import Bot, Update
+from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes
 from scraper import create_scraper
 from otp_filter import otp_filter
@@ -30,6 +30,9 @@ BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 GROUP_ID = os.getenv('TELEGRAM_GROUP_ID')
 IVASMS_EMAIL = os.getenv('IVASMS_EMAIL')
 IVASMS_PASSWORD = os.getenv('IVASMS_PASSWORD')
+# Telegram webhook secret token must be 1-256 characters, only A-Z, a-z, 0-9, _ and -
+WEBHOOK_TOKEN = os.getenv('WEBHOOK_TOKEN', 'webhook_' + str(abs(hash(BOT_TOKEN)))[:12] if BOT_TOKEN else 'webhook_fallback123')
+ADMIN_TOKEN = os.getenv('ADMIN_TOKEN', 'admin_' + str(abs(hash(BOT_TOKEN)))[:12] if BOT_TOKEN else 'admin_fallback123')
 
 # Bot statistics
 bot_stats = {
@@ -93,7 +96,12 @@ async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔍 <b>Checking for new OTPs...</b>", parse_mode='HTML')
     
     try:
-        check_and_send_otps()
+        # Run check in thread to avoid blocking
+        import threading
+        check_thread = threading.Thread(target=check_and_send_otps)
+        check_thread.start()
+        check_thread.join(timeout=10)  # Wait max 10 seconds
+        
         await update.message.reply_text(
             "✅ <b>OTP check completed!</b>\n\n"
             f"Last check: {bot_stats['last_check']}\n"
@@ -209,14 +217,61 @@ def initialize_bot():
         bot_stats['last_error'] = str(e)
         return False
 
-def send_telegram_message(message, parse_mode='HTML'):
-    """Send message to Telegram group"""
+def verify_admin_auth():
+    """Verify admin authentication from request headers"""
+    auth_header = request.headers.get('Authorization')
+    if not auth_header:
+        return False
+    
+    if auth_header.startswith('Bearer '):
+        token = auth_header[7:]  # Remove 'Bearer ' prefix
+        return token == ADMIN_TOKEN
+    
+    return False
+
+def send_telegram_message(message, parse_mode='HTML', reply_markup=None):
+    """Send message to Telegram group with optional markup buttons"""
     try:
         if not bot or not GROUP_ID:
             logger.error("Bot or Group ID not configured")
             return False
         
-        # Use asyncio to run the async function
+        # Check if we're already in an event loop
+        try:
+            loop = asyncio.get_running_loop()
+            # We're in an event loop, use a different approach
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(_send_message_sync, message, parse_mode, reply_markup)
+                return future.result(timeout=30)
+        except RuntimeError:
+            # No event loop running, create a new one
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                async def send_message():
+                    await bot.send_message(
+                        chat_id=GROUP_ID,
+                        text=message,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup
+                    )
+                
+                loop.run_until_complete(send_message())
+                logger.info("Message sent to Telegram successfully")
+                return True
+            finally:
+                loop.close()
+        
+    except Exception as e:
+        logger.error(f"Failed to send Telegram message: {e}")
+        bot_stats['last_error'] = str(e)
+        return False
+
+def _send_message_sync(message, parse_mode='HTML', reply_markup=None):
+    """Synchronous helper for sending messages from within event loops"""
+    try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
@@ -224,38 +279,75 @@ def send_telegram_message(message, parse_mode='HTML'):
             await bot.send_message(
                 chat_id=GROUP_ID,
                 text=message,
-                parse_mode=parse_mode
+                parse_mode=parse_mode,
+                reply_markup=reply_markup
             )
         
         loop.run_until_complete(send_message())
         loop.close()
-        
         logger.info("Message sent to Telegram successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send message in sync mode: {e}")
+        return False
+
+def setup_webhook():
+    """Set up Telegram webhook"""
+    try:
+        if not bot or not telegram_app:
+            logger.error("Bot not initialized, cannot set webhook")
+            return False
+        
+        # Get the public URL for the webhook
+        # In Replit, construct the webhook URL properly
+        repl_id = os.environ.get('REPL_ID')
+        repl_user = os.environ.get('REPL_OWNER', 'user')
+        
+        if repl_id:
+            # Use proper Replit domain format
+            webhook_url = f"https://{repl_id}.{repl_user}.replit.app/webhook/{WEBHOOK_TOKEN}"
+        else:
+            # Fallback for local testing
+            webhook_url = f"http://localhost:5000/webhook/{WEBHOOK_TOKEN}"
+        
+        # Set up webhook with asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        async def set_webhook_async():
+            # Clean the webhook token to only contain allowed characters
+            clean_token = ''.join(c for c in WEBHOOK_TOKEN if c.isalnum() or c in '_-')[:256]
+            
+            await bot.set_webhook(
+                url=webhook_url,
+                secret_token=clean_token,
+                drop_pending_updates=True
+            )
+            logger.info(f"Webhook set successfully: {webhook_url[:50]}...")
+            logger.info(f"Using clean secret token: {clean_token[:10]}...")
+        
+        loop.run_until_complete(set_webhook_async())
+        loop.close()
         return True
         
     except Exception as e:
-        logger.error(f"Failed to send Telegram message: {e}")
-        bot_stats['last_error'] = str(e)
+        logger.error(f"Failed to set webhook: {e}")
         return False
 
 def start_telegram_bot():
-    """Start the Telegram bot in a separate thread"""
+    """Start the Telegram bot command handlers"""
     if telegram_app:
-        logger.info("Starting Telegram command handlers...")
-        try:
-            # Run the bot in a separate thread
-            def run_bot():
-                asyncio.set_event_loop(asyncio.new_event_loop())
-                telegram_app.run_polling(drop_pending_updates=True)
-            
-            bot_thread = threading.Thread(target=run_bot, daemon=True)
-            bot_thread.start()
-            logger.info("Telegram bot polling started")
-        except Exception as e:
-            logger.error(f"Failed to start Telegram bot polling: {e}")
+        logger.info("Telegram command handlers initialized and ready")
+        logger.info("Setting up webhook...")
+        
+        # Try to set up webhook if running in production
+        if os.environ.get('REPL_ID'):
+            setup_webhook()
+        else:
+            logger.info("Running locally, skipping webhook setup")
 
 def check_and_send_otps():
-    """Check for new OTPs and send to Telegram"""
+    """Check for new OTPs and send to Telegram with improved error handling"""
     global bot_stats
     
     try:
@@ -263,9 +355,25 @@ def check_and_send_otps():
             logger.error("Scraper not initialized")
             return
         
-        # Fetch messages from IVASMS
+        # Fetch messages from IVASMS with timeout handling
         logger.info("Checking for new OTPs...")
-        messages = scraper.fetch_messages()
+        
+        # Add retry logic for network issues
+        max_retries = 3
+        retry_delay = 2
+        messages = None
+        
+        for attempt in range(max_retries):
+            try:
+                messages = scraper.fetch_messages()
+                break  # Success, exit retry loop
+            except Exception as e:
+                logger.warning(f"OTP fetch attempt {attempt + 1}/{max_retries} failed: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
+                else:
+                    raise  # Re-raise on final attempt
+        
         bot_stats['last_check'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
         if not messages:
@@ -281,15 +389,24 @@ def check_and_send_otps():
         
         logger.info(f"Found {len(new_messages)} new OTPs")
         
-        # Send messages to Telegram
+        # Create beautiful markup buttons for channel and group
+        keyboard = [
+            [
+                InlineKeyboardButton("📡 Join Channel", url="https://t.me/cybixtech"),
+                InlineKeyboardButton("💬 OTP Group", url="https://t.me/legionsms")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Send messages to Telegram with beautiful buttons
         if len(new_messages) == 1:
             message = format_otp_message(new_messages[0])
         else:
             message = format_multiple_otps(new_messages)
         
-        if send_telegram_message(message):
+        if send_telegram_message(message, reply_markup=reply_markup):
             bot_stats['total_otps_sent'] += len(new_messages)
-            logger.info(f"Successfully sent {len(new_messages)} OTPs to Telegram")
+            logger.info(f"Successfully sent {len(new_messages)} OTPs to Telegram with markup buttons")
         else:
             logger.error("Failed to send OTPs to Telegram")
         
@@ -342,7 +459,10 @@ def home():
 
 @app.route('/check-otp')
 def manual_check():
-    """Manual OTP check endpoint"""
+    """Manual OTP check endpoint (admin only)"""
+    if not verify_admin_auth():
+        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
+    
     try:
         check_and_send_otps()
         return jsonify({
@@ -386,7 +506,7 @@ def bot_status():
 
 @app.route('/test-message')
 def test_message():
-    """Send test message to Telegram"""
+    """Send test message to Telegram with beautiful buttons"""
     test_msg = """🧪 <b>Test Message</b>
 
 🔢 OTP: <code>123456</code>
@@ -394,10 +514,22 @@ def test_message():
 🌐 Service: <b>Test Service</b>
 ⏰ Time: Test Time
 
-<i>This is a test message from the bot!</i>"""
+<i>This is a test message from the bot!</i>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+<i>Powered by @cybixdev</i>"""
     
-    if send_telegram_message(test_msg):
-        return jsonify({'status': 'success', 'message': 'Test message sent'})
+    # Create beautiful markup buttons for channel and group
+    keyboard = [
+        [
+            InlineKeyboardButton("📡 Join Channel", url="https://t.me/cybixtech"),
+            InlineKeyboardButton("💬 OTP Group", url="https://t.me/legionsms")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if send_telegram_message(test_msg, reply_markup=reply_markup):
+        return jsonify({'status': 'success', 'message': 'Test message sent with buttons'})
     else:
         return jsonify({'status': 'error', 'message': 'Failed to send test message'}), 500
 
@@ -410,9 +542,55 @@ def clear_cache():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+@app.route('/webhook/<token>', methods=['POST'])
+def webhook(token):
+    """Handle Telegram webhook updates with security verification"""
+    if not telegram_app:
+        return jsonify({'status': 'error', 'message': 'Bot not initialized'}), 500
+    
+    # Verify webhook token
+    if token != WEBHOOK_TOKEN:
+        logger.warning(f"Webhook called with invalid token: {token[:10]}...")
+        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
+    
+    # Verify Telegram secret token if provided
+    telegram_secret = request.headers.get('X-Telegram-Bot-Api-Secret-Token')
+    clean_token = ''.join(c for c in WEBHOOK_TOKEN if c.isalnum() or c in '_-')[:256]
+    if telegram_secret and telegram_secret != clean_token:
+        logger.warning("Webhook called with invalid Telegram secret")
+        return jsonify({'status': 'error', 'message': 'Invalid secret'}), 401
+    
+    try:
+        # Get the update from Telegram
+        update_data = request.get_json()
+        
+        # Process the update
+        if update_data:
+            # Create an asyncio event loop for this thread
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            async def process_update():
+                update = Update.de_json(update_data, telegram_app.bot)
+                await telegram_app.process_update(update)
+            
+            loop.run_until_complete(process_update())
+            loop.close()
+            
+            return jsonify({'status': 'ok'})
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    
+    return jsonify({'status': 'error', 'message': 'No update data'}), 400
+
 @app.route('/start-monitor')
 def start_monitor():
-    """Start background monitor"""
+    """Start background monitor (admin only)"""
+    if not verify_admin_auth():
+        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
+    
     global bot_stats
     
     if bot_stats['is_running']:
@@ -427,7 +605,10 @@ def start_monitor():
 
 @app.route('/stop-monitor')
 def stop_monitor():
-    """Stop background monitor"""
+    """Stop background monitor (admin only)"""
+    if not verify_admin_auth():
+        return jsonify({'status': 'error', 'message': 'Unauthorized'}), 401
+    
     global bot_stats
     
     bot_stats['is_running'] = False
@@ -450,14 +631,17 @@ def main():
         logger.error("Failed to initialize bot. Check your configuration.")
         return
     
-    # Start Telegram command handlers
+    # Initialize Telegram command handlers (no polling to avoid threading issues)
     start_telegram_bot()
     
-    # Send startup message
-    startup_message = """🚀 <b>Bot Started Successfully!</b>
+    # Send startup message after Flask server starts
+    def send_startup_message():
+        time.sleep(2)  # Wait for everything to be ready
+        startup_message = """🚀 <b>Bot Started Successfully!</b>
 
 ✅ Telegram bot connected
 ✅ Command handlers active
+✅ Webhook configured
 🔍 Monitoring for new OTPs...
 
 📋 <b>Available Commands:</b>
@@ -468,8 +652,15 @@ def main():
 /stats - Detailed statistics
 
 <i>Bot is now running and will automatically send new OTPs to this group.</i>"""
+        
+        if send_telegram_message(startup_message):
+            logger.info("Startup message sent successfully")
+        else:
+            logger.warning("Failed to send startup message")
     
-    send_telegram_message(startup_message)
+    # Send startup message in background thread to avoid blocking
+    startup_thread = threading.Thread(target=send_startup_message, daemon=True)
+    startup_thread.start()
     
     # Start background monitor
     monitor_thread = threading.Thread(target=background_monitor, daemon=True)

@@ -31,7 +31,7 @@ class IVASMSScraper:
             
             # Get login page first
             login_url = f"{self.base_url}/login"
-            response = self.session.get(login_url)
+            response = self.session.get(login_url, timeout=15)
             
             if response.status_code != 200:
                 print(f"Failed to access login page. Status: {response.status_code}")
@@ -55,7 +55,7 @@ class IVASMSScraper:
                 login_data['_token'] = csrf_token
             
             # Submit login form
-            login_response = self.session.post(login_url, data=login_data)
+            login_response = self.session.post(login_url, data=login_data, timeout=15)
             
             # Check if login was successful
             if login_response.status_code == 200:
@@ -101,7 +101,7 @@ class IVASMSScraper:
             for path in possible_paths:
                 try:
                     url = f"{self.base_url}{path}"
-                    response = self.session.get(url)
+                    response = self.session.get(url, timeout=15)
                     
                     if response.status_code == 200:
                         soup = BeautifulSoup(response.content, 'html.parser')
@@ -115,7 +115,7 @@ class IVASMSScraper:
             
             if not messages:
                 # Try to find any SMS-like content on the main page
-                dashboard_response = self.session.get(f"{self.base_url}/dashboard")
+                dashboard_response = self.session.get(f"{self.base_url}/dashboard", timeout=15)
                 if dashboard_response.status_code == 200:
                     soup = BeautifulSoup(dashboard_response.content, 'html.parser')
                     messages = self._extract_messages_from_page(soup)
@@ -280,9 +280,15 @@ class IVASMSScraper:
     def test_connection(self):
         """Test connection to IVASMS"""
         try:
-            response = self.session.get(self.base_url)
-            return response.status_code == 200
-        except:
+            response = self.session.get(self.base_url, timeout=10)
+            if response.status_code == 200:
+                print(f"Successfully connected to IVASMS.com")
+                return True
+            else:
+                print(f"IVASMS connection failed with status: {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"IVASMS connection error: {e}")
             return False
 
 def create_scraper(email, password):
@@ -291,16 +297,30 @@ def create_scraper(email, password):
     
     if not scraper.test_connection():
         print("Warning: Cannot connect to IVASMS.com")
-        return None
+        print("This might be due to:")
+        print("1. Network connectivity issues")
+        print("2. IVASMS.com being temporarily down")
+        print("3. Firewall/proxy restrictions")
+        print("Bot will continue running and retry connections periodically.")
+        # Return scraper anyway so bot can retry later
+        return scraper
     
     return scraper
 
 # Demo/test function
 def test_scraper():
-    """Test the scraper with dummy data"""
-    # This is for testing only - replace with real credentials
-    email = "tawandamahachi07@gmail.com"
-    password = "mahachi2007"
+    """Test the scraper with environment credentials"""
+    import os
+    from dotenv import load_dotenv
+    
+    load_dotenv()
+    email = os.getenv('IVASMS_EMAIL')
+    password = os.getenv('IVASMS_PASSWORD')
+    
+    if not email or not password:
+        print("Error: IVASMS credentials not found in environment variables")
+        print("Please set IVASMS_EMAIL and IVASMS_PASSWORD")
+        return
     
     scraper = create_scraper(email, password)
     if scraper:
